@@ -1,0 +1,473 @@
+---
+title: "Data Visualisation Project - Study of wildfires and fire servise calls in Greece for summer 2021"
+author: "Papadimitriou E. F."
+date: "2023-11-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Data Visualization project - Study of forest fires in Greece and the human factor
+
+We will try to combine satellite data about forest fires in Greece in the summer of 2021 with fire service calls data from the same period.
+
+```{r, include=FALSE}
+suppressWarnings({
+library(dplyr)
+library(readxl)
+library(janitor)
+library(lubridate)
+library(ggplot2)
+library(patchwork)
+library(tidyverse)
+library(terra)
+library(geodata)
+library(maptiles)
+library(raster)
+library(sp)
+library(sf)
+library(leaflet)
+library(leaflet.extras2)
+library(shiny)
+})
+
+```
+
+
+We are going to use VIIRS data for Greece in csv form, directly downloaded from: https://firms.modaps.eosdis.nasa.gov/country/
+
+```{r}
+#To get coordinates from satellite VIIRS csv
+suppressWarnings({
+viirs = read.csv("C:/Users/manol/Documents/UniLu-MADS/Semester 1/DataVisualization/FinalProject/Solution/DataVisProject_Wildfires/WildfiresGreece/viirs-snpp_2021_Greece.csv", as.is=T)
+
+})
+#Max and min coordinates for Greece:
+
+upperLeft = c(41.91452561696354, 18.573755594482613)
+
+lowerRight = c(35.06779648445501, 28.350020019193696)
+
+#For prefectures we use a shapefile downloaded from:
+#https://geodata.gov.gr/en/dataset/oria-nomon-okkhe
+
+#Quick peek
+head(viirs)
+
+```
+
+
+
+We will also add Forest Fire incident reports for 2021 by the Greek Fire Brigade from
+https://www.fireservice.gr/el/synola-dedomenon
+
+```{r}
+#To get coordinates from fire department report log in xls
+suppressWarnings({
+fdreports = read_xls("WildfiresGreece/Dasikes_Pyrkagies_2021.xls", .name_repair = "universal")
+
+#Tidying colnames
+fdreports_df <- as_data_frame(fdreports)
+colnames(fdreports_df) <- fdreports_df[1,]
+fdreports_df <- fdreports_df[-1,]
+colnames(fdreports_df)[3] = "XENGAGE"
+colnames(fdreports_df)[4] = "YENGAGE"
+colnames(fdreports_df)[7] = "StartDate"
+colnames(fdreports_df)[15] = "Woods"
+colnames(fdreports_df)[16] = "WoodedArea"
+colnames(fdreports_df)[17] = "Parks"
+colnames(fdreports_df)[18] = "Grasslands"
+colnames(fdreports_df)[19] = "Swamps"
+colnames(fdreports_df)[20] = "Crops"
+colnames(fdreports_df)[21] = "CropsRes"
+colnames(fdreports_df)[22] = "Wastelands"
+colnames(fdreports_df)[32] = "Helicopters"
+colnames(fdreports_df)[33] = "CL415"
+colnames(fdreports_df)[34] = "CL215"
+colnames(fdreports_df)[35] = "PZL"
+colnames(fdreports_df)[36] = "GRU."
+colnames(fdreports_df)[37] = "HiredHeli"
+colnames(fdreports_df)[38] = "HiredAircraft"
+
+#Remove points outside Greece
+fdreports_df <- filter(fdreports_df, XENGAGE > 18, YENGAGE > 34 )
+
+#Tidying the excel dates
+fdreports_df$StartDate <- as.numeric(as.character(fdreports_df$StartDate))
+fdreports_df$StartDate <- as.Date(fdreports_df$StartDate, origin = "1899-12-30")
+fdreports_df$'Ημερ/νία Κατασβεσης' <- as.numeric(as.character(fdreports_df$'Ημερ/νία Κατασβεσης'))
+fdreports_df$'Ημερ/νία Κατασβεσης' <- as.Date(fdreports_df$'Ημερ/νία Κατασβεσης', origin = "1899-12-30")
+
+#Clean lines with no coordinates for map creation
+fdreports_clean <- fdreports_df |>
+  drop_na("XENGAGE", "YENGAGE")
+})
+
+fdreports_clean$XENGAGE <- as.numeric(fdreports_clean$XENGAGE)
+fdreports_clean$YENGAGE <- as.numeric(fdreports_clean$YENGAGE)
+
+
+fdreports_clean <-fdreports_clean |>
+  mutate(a_month = format(fdreports_clean$StartDate, "%m"),
+         HiredHeli = coalesce(as.double(HiredHeli), 0),
+         HiredAircraft = coalesce(as.double(HiredAircraft), 0),
+         Helicopters = coalesce(as.double(Helicopters), 0),
+         CL415 = coalesce(as.double(CL415), 0),
+         CL215 = coalesce(as.double(CL215), 0),
+         PZL = coalesce(as.double(PZL), 0),
+         GRU. = coalesce(as.double(GRU.), 0),
+         Woods = coalesce(as.double(Woods), 0),
+         WoodedArea = coalesce(as.double(WoodedArea), 0),
+         Parks = coalesce(as.double(Parks), 0),
+         Grasslands = coalesce(as.double(Grasslands), 0),
+         Swamps = coalesce(as.double(Swamps), 0),
+         Crops = coalesce(as.double(Crops), 0),
+         CropsRes = coalesce(as.double(CropsRes), 0),
+         Wastelands = coalesce(as.double(Wastelands), 0)
+         )
+#points = st_as_sf(fdreports_clean, coords = c("XENGAGE", "YENGAGE"), crs = 4326)
+
+#plot(st_geometry(points), pch=16, col="green")
+#})
+
+fdreports_clean$CL415[6506] = 6
+fdreports_clean$CL215[6506] = 9
+fdreports_clean$HiredHeli[7147] = 28
+fdreports_clean$HiredAircraft[7147] = 9
+
+
+fdreports_clean <-fdreports_clean |>
+  mutate(AFairframes = Helicopters + CL415 + CL215 + PZL + GRU.,
+         TotalAirframes = Helicopters + CL415 + CL215 + PZL + GRU. + HiredHeli + HiredAircraft,
+         TotalIncLosses = Woods + WoodedArea + Parks + Grasslands + Swamps + Crops + CropsRes + Wastelands)
+
+head(fdreports_clean |>
+  dplyr::select(1:4, 7:10, 15:16, 32:34, 38:42))
+
+# icon to blue square
+square_blue <-
+  makeIcon(iconUrl = "https://www.freeiconspng.com/uploads/blue-square-image-3.png",
+           iconWidth = 18,
+           iconHeight = 18)
+
+#Color palette
+#pal <- colorNumeric(palette = "YlOrRd", domain=ourShape@data$n)
+
+# create leaflet map with active fire location points
+fdreports2021_map <- leaflet(fdreports_clean) |>
+  addTiles() |>
+  addMarkers(lng = ~XENGAGE,
+             lat = ~YENGAGE,
+             icon = ~square_blue)
+
+#fdreports2021_map
+
+```
+
+A plot of burned area distribution in the year
+```{r}
+burnedarea <- fdreports_clean |>
+  dplyr::select(7, Woods, TotalIncLosses, a_month)
+
+#For the plot based only on fd reports
+#suppressWarnings({
+burnedarea |>
+  ggplot()+
+  aes(x = burnedarea$StartDate, y = as.double(TotalIncLosses), color = a_month)+
+  geom_point() +
+  labs(title = "Forest area lost per day of the year 2021 (by fire brigade reports)",
+       x = NULL,
+       y = "Area in 1,000 sq. meters (0.1 Ha)",
+       color = NULL)+
+  theme(legend.position = "none") +
+  scale_y_continuous(labels = scales::comma, limits=c(0.1, 600000))
+#})
+```
+
+
+Use of airframes compared to the size of the fire
+```{r}
+suppressWarnings({
+
+p1 <-  ggplot(fdreports_clean)+
+  aes(y = as.double(Woods), x = as.double(AFairframes))+
+  geom_point() +
+  geom_smooth(method = "loess", span = 5, formula = 'y ~ x') +
+  labs(title = NULL,
+       y = "Forest area in 1,000 sq. meters (0.1 Ha)",
+       x = "Airframes used (HAF only)",
+       color = NULL)+
+  theme(legend.position = "none") +
+  scale_y_continuous(labels = scales::comma) +
+  xlim(1, 300)
+  
+
+p2 <-  ggplot(fdreports_clean)+
+  aes(y = as.double(Woods), x = as.double(TotalAirframes))+
+  geom_point() +
+  geom_smooth(method = "loess", span = 5, formula = 'y ~ x') +
+  labs(title = NULL,
+       y = "Forest area in 1,000 sq. meters (0.1 Ha)",
+       x = "Airframes used (total)",
+       color = NULL)+
+  theme(legend.position = "none") +
+  scale_y_continuous(labels = scales::comma) +
+  xlim(1, 300)
+
+p3 <-  ggplot(fdreports_clean)+
+  aes(y = as.double(TotalIncLosses), x = as.double(TotalAirframes))+
+  geom_point() +
+  geom_smooth(method = "loess", span = 5, formula = 'y ~ x') +
+  labs(title = NULL,
+       y = "Total area in 1,000 sq. meters (0.1 Ha)",
+       x = "Airframes used (total)",
+       color = NULL)+
+  theme(legend.position = "none") +
+  scale_y_continuous(labels = scales::comma) +
+  xlim(1, 300)
+
+p1 | p2 | p3
+})
+```
+
+
+Types of aircraft used compared to the size of the fire
+```{r}
+#New table for airframes only
+Airframes_df <- fdreports_clean |>
+  dplyr::select(3:4, 7, 'TotalIncLosses', 32:41)
+
+AirframesLong <- pivot_longer(Airframes_df, cols = 5:11,
+                              names_to = "Type",
+                              values_to = "Number")
+AirframesLong <- AirframesLong |>
+  mutate(Hired = ifelse(grepl("Hired", Type), "Hired", "HAF"),
+         Category = ifelse(grepl("Heli", Type), "Helicopter", 
+                           ifelse(grepl("CL", Type), "LargeAircraft", 
+                                  ifelse(grepl("PZL", Type), "LightAircraft", 
+                                         ifelse(grepl("HiredAir", Type), "LargeAircraft", "Other")))))
+
+HAFonly <- fdreports_clean |>
+  dplyr::select(3:4, 7, 'TotalIncLosses', 32:36, 40:41)
+
+HAF_Long <- pivot_longer(Airframes_df, cols = 5:9,
+                              names_to = "Type",
+                              values_to = "Number")
+
+HAF_Long <- HAF_Long |>
+  mutate(Category = ifelse(grepl("Helicopters", Type), "Helicopter", 
+                           ifelse(grepl("CL", Type), "LargeAircraft", 
+                                  ifelse(grepl("PZL", Type), "LightAircraft", "Other"))))
+
+
+suppressWarnings({
+
+ggplot(AirframesLong)+
+  aes(y = TotalIncLosses, x = Number, color = Category, shape = Hired)+
+  geom_point() +
+  geom_smooth(method = "loess", span = 5, formula = 'y ~ x') +
+  labs(title = NULL,
+       y = "Total area in 1,000 sq. meters (0.1 Ha)",
+       x = "Airframes used (Total)")+
+  scale_y_continuous(labels = scales::comma)+
+  facet_wrap(~Category, scales = "free_y", ncol = 1)
+
+})
+
+```
+
+
+###Several maps for the summer months
+
+Mapping out different airframe use for the 3 summer months
+
+First, for helicopters
+```{r}
+#We will check July for starters
+#AirframesLongJuly <- AirframesLong |>
+#  dplyr::filter(a_month == "07")
+
+#We will only check helicopters for simplicity
+AirframesLongH <- AirframesLong |>
+  dplyr::filter(Category == "Helicopter")
+
+AirframesLongH <- AirframesLongH |>
+  dplyr::filter(Number != 0)
+
+#Icon for helicopters
+helicopter_icon <-
+  makeIcon(iconUrl = "https://www.freeiconspng.com/uploads/helicopter-icon-17.png",
+           iconWidth = 18,
+           iconHeight = 18)
+
+#Map of uses of the specific airframe in July
+
+helicopter_July_map <- leaflet(width = "100%") %>%
+  setView(lng = 24.16, lat = 38.51, zoom = 6) %>%
+  addProviderTiles("Esri.WorldStreetMap")
+
+# specify shiny user interface and time slider
+
+
+#https://blogs.unimelb.edu.au/researcher-library/2020/06/19/making-a-covid-19-map-in-r-usin#g-shiny-and-leaflet/
+
+#BETTER
+#https://stackoverflow.com/questions/69276453/how-do-i-create-a-shiny-slider-app-to-view-my-data-over-time-on-the-map-that-i-h
+ui <- shinyUI(pageWithSidebar(
+  headerPanel("Map of Helicopter use for Summer 2021"),
+  sidebarPanel(
+    dateRangeInput(
+      "range",
+      "Date range",
+      start  = "2021-06-01",
+      end    = "2021-08-31"
+    )),
+  mainPanel(
+    leafletOutput("map")
+  )
+))
+
+# shiny server input/output
+server <- shinyServer(function(input, output) {
+  filtered_data_H <- reactive({
+    AirframesLongH |> filter(AirframesLongH$StartDate >= input$range[1] & AirframesLongH$StartDate <= input$range[2])
+  })
+
+  output$map <- renderLeaflet({
+    helicopter_July_map |>
+      addMarkers(
+        data = filtered_data_H(),
+        lng = ~XENGAGE,
+        lat = ~YENGAGE,
+        icon = ~helicopter_icon
+      ) 
+      
+  })
+})
+
+shinyApp(ui, server)
+
+```
+
+
+
+Then, for heavy aircraft:
+```{r}
+  #We will only check heavy aircraft for simplicity
+AirframesLongAXL <- AirframesLong |>
+  dplyr::filter(Category == "LargeAircraft")
+
+AirframesLongAXL <- AirframesLongAXL |>
+  dplyr::filter(Number != 0)
+
+#Icon for helicopters
+AXL_icon <-
+  makeIcon(iconUrl = "https://www.freeiconspng.com/uploads/plane-icon--iconshow-14.png",
+           iconWidth = 18,
+           iconHeight = 18)
+
+#Map of uses of the specific airframe in July
+
+HeavyAircraft_July_map <- leaflet(width = "100%") %>%
+  setView(lng = 24.16, lat = 38.51, zoom = 6) %>%
+  addProviderTiles("Esri.WorldStreetMap")
+
+# specify shiny user interface and time slider
+
+
+#https://blogs.unimelb.edu.au/researcher-library/2020/06/19/making-a-covid-19-map-in-r-usin#g-shiny-and-leaflet/
+
+#BETTER
+#https://stackoverflow.com/questions/69276453/how-do-i-create-a-shiny-slider-app-to-view-my-data-over-time-on-the-map-that-i-h
+ui2 <- shinyUI(pageWithSidebar(
+  headerPanel("Map of Large Aircraft use for Summer 2021"),
+  sidebarPanel(
+    dateRangeInput(
+      "range",
+      "Date range",
+      start  = "2021-06-01",
+      end    = "2021-08-31"
+    )),
+  mainPanel(
+    leafletOutput("map")
+  )
+))
+
+# shiny server input/output
+server2 <- shinyServer(function(input, output) {
+  filtered_data_AXL <- reactive({
+    AirframesLongAXL |> filter(AirframesLongAXL$StartDate >= input$range[1] & AirframesLongAXL$StartDate <= input$range[2])
+  })
+
+  output$map <- renderLeaflet({
+    HeavyAircraft_July_map |>
+      addMarkers(
+        data = filtered_data_AXL(),
+        lng = ~XENGAGE,
+        lat = ~YENGAGE,
+        icon = ~AXL_icon
+      ) 
+      
+  })
+})
+
+shinyApp(ui2, server2)
+
+```
+
+
+
+For active fires by VIIRS satelite data
+```{r}
+#We only choose high confidence squares
+activefires <- viirs |>
+  dplyr::filter(confidence == "h")
+
+
+square_red <-
+  makeIcon(iconUrl = "https://www.freeiconspng.com/uploads/red-square-png-14.png",
+           iconWidth = 18,
+           iconHeight = 18)
+
+livefires_map <- leaflet(width = "100%") %>%
+  setView(lng = 24.16, lat = 38.51, zoom = 6) %>%
+  addProviderTiles("Esri.WorldStreetMap")
+
+# specify shiny user interface and time slider
+ui3 <- shinyUI(pageWithSidebar(
+  headerPanel("Map of Active fires by VIIRS sensors for Summer 2021"),
+  sidebarPanel(
+    dateRangeInput(
+      "range",
+      "Date range",
+      start  = "2021-06-01",
+      end    = "2021-08-31"
+    )),
+  mainPanel(
+    leafletOutput("map")
+  )
+))
+
+# shiny server input/output
+server3 <- shinyServer(function(input, output) {
+  filtered_data_active <- reactive({
+    activefires |> filter(activefires$acq_date >= input$range[1] & activefires$acq_date <= input$range[2])
+  })
+
+  output$map <- renderLeaflet({
+    livefires_map |>
+      addMarkers(
+        data = filtered_data_active(),
+        lng = ~longitude,
+        lat = ~latitude,
+        icon = ~square_red
+      ) 
+      
+  })
+})
+
+shinyApp(ui3, server3)
+```
+
