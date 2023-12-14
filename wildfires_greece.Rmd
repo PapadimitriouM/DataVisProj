@@ -180,7 +180,9 @@ fdreports2021_map <- leaflet(fdreports_clean) |>
 
 ```
 
-A plot of burned area distribution in the year
+### Distribution of burned area in 2021
+
+We plot the burned area distribution in the year using the burned area index by the fire service reports. There is burned area by the type of terrain, so we also create a column with the total area lost for each incident. We have tried to bin by week, so there might be multiple incidents stacked per week.  
 ```{r}
 burnedarea <- fdreports_clean |>
   dplyr::select(7, Woods, TotalIncLosses, a_month, a_week)
@@ -201,7 +203,7 @@ burnedarea |>
 ```
 
 
-##Use of airframes compared to the size of the fire
+### Use of airframes compared to the size of the fire
 
 The next part of the analysis aims to deduce the possible tactics used by the Hellenic Fire Service. We expect the number and type of airframes used to be proportionate to the size of the forest fire. This we will check by plotting the area destroyed as a function of the total airframes used
 ```{r}
