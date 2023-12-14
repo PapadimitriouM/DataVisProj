@@ -252,7 +252,7 @@ p1 | p2 | p3
 
 We see how data can sometimes lie. By plotting the "Wood" terrain compared to Air Force aircraft used we get a picture that does not seem linear at all. By changing that to include all used aircraft (Air Force and rented) as well as the entire area lost by any given forest fire (independent of terrain), we get something far more linear as expected.
 
-##Types of aircraft used compared to the size of the fire
+### Types of aircraft used compared to the size of the fire
 
 Continuing our research on tactics we also check the use of each separate airframe type compared to the size of the fire. While not explicitly described, we will put all available airframes in 5 categories, Helicopter,Light Aircraft, Large Aircraft or Other (unspecified types). We also add an extra layer, whether an aircraft is hired or not.
 ```{r}
@@ -305,9 +305,10 @@ From the above graphs, there is no clear indication of a unified strategy. What 
 
 Non-interactive helicopter use map for Summer 2021 (Working)
 ```{r}
+suppressMessages({
 #Attempt to map from shapefile
 #Idea from: https://gis.stackexchange.com/questions/460615/using-a-downloaded-shapefile-in-# ggplot2-and-r-readogr-error
-gr_shp <- st_read(file.path("C:/Users/manol/Documents/UniLu-MADS/Semester 1/DataVisualization/FinalProject/Solution/DataVisProject_Wildfires/WildfiresGreece/nomoiokxe/nomoi_okxe", "nomoi_okxe.shp"))
+#gr_shp <- st_read(file.path("C:/Users/manol/Documents/UniLu-MADS/Semester #1/DataVisualization/FinalProject/Solution/DataVisProject_Wildfires/WildfiresGreece/nomoiok#xe/nomoi_okxe", "nomoi_okxe.shp"))
 
 # Basic plot of this shape file:
 #par(mar=c(0,0,0,0))
@@ -336,26 +337,27 @@ AirframesLongH <- AirframesLongH |>
   mutate(HelicopterNumber = Number)
 
 AirframesLongH <- AirframesLongH |>
-  dplyr::filter(StartDate >= "2021-06-01", StartDate <= "2021-08-31")
+  dplyr::filter(StartDate >= "2021-08-01", StartDate <= "2021-08-31")
 
 #Finally, a map of helicopter use density for the entire year
 ggmap(gr_map) +
     geom_point(data = AirframesLongH, mapping = aes(x = XENGAGE, y = YENGAGE, 
                                         size = HelicopterNumber, alpha = 0.5)) +
     labs(title = "Helicopter use density in firefighting in Greece",
-         subtitle = "Summer 2021",
+         subtitle = "Weeks of August, 2021",
          x=NULL,
          y=NULL) +
-    theme(legend.position = "none") +
-    facet_wrap(~a_month, ncol = 3)
+    theme(legend.position = "none",
+          axis.text.x=element_blank(),
+          axis.text.y=element_blank()) +
+    facet_wrap(~a_week, ncol = 3)
+})
 ```
 
 
 Non-interactive active fire map for mega fire in the island of Euvoia, August 2021
 ```{r}
-#Attempt to map from shapefile
-#Idea from: https://gis.stackexchange.com/questions/460615/using-a-downloaded-shapefile-in-# ggplot2-and-r-readogr-error
-
+suppressMessages({
 #Box for Evoia
 ev_borders = c(bottom  = 37.8, 
                  top     = 39.2,
@@ -380,9 +382,12 @@ ggmap(ev_map) +
          subtitle = "Summer 2021",
          x=NULL,
          y=NULL) +
-    theme(legend.position = "none") +
+    theme(legend.position = "none",
+          axis.text.x=element_blank(),
+          axis.text.y=element_blank()) +
     facet_wrap(~a_month, ncol = 3) +
     scale_color_brewer(palette = "YlOrRd")
+})
 ```
 
 Mapping out different airframe use for the 3 summer months (Shiny App)
