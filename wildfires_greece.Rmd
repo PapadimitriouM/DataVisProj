@@ -17,9 +17,11 @@ We will try to combine satellite data about forest fires in Greece in the summer
 suppressWarnings({
 library(dplyr)
 library(readxl)
+library(openxlsx)
 library(janitor)
 library(lubridate)
 library(ggplot2)
+library(scales)
 library(ggmap)
 library(maps)
 library(patchwork)
@@ -43,16 +45,28 @@ library(RColorBrewer)
 
 We are going to use VIIRS data for Greece in csv form, directly downloaded from: https://firms.modaps.eosdis.nasa.gov/country/
 
+https://firms.modaps.eosdis.nasa.gov/data/country/viirs-snpp/2021/viirs-snpp_2021_Greece.csv
+
 ```{r}
 #To get coordinates from satellite VIIRS csv
 suppressWarnings({
-viirs = read.csv("C:/Users/manol/Documents/UniLu-MADS/Semester 1/DataVisualization/FinalProject/Solution/DataVisProject_Wildfires/WildfiresGreece/viirs-snpp_2021_Greece.csv", as.is=T)
+viirs = read.csv("https://firms.modaps.eosdis.nasa.gov/data/country/viirs-snpp/2021/viirs-snpp_2021_Greece.csv", as.is=T)
 
 })
 
 viirs <- viirs |>
     mutate(a_month = format(as.Date(acq_date), "%m"),
-         a_week = isoweek(as.Date(acq_date)))
+         a_week = isoweek(as.Date(acq_date)),
+         pixel_area_ha = 375*375/10000)
+
+
+mymonths <- c("1.Jan","2.Feb","3.Mar",
+              "4.Apr","5.May","6.Jun",
+              "7.Jul","8.Aug","9.Sep",
+              "10.Oct","11.Nov","12.Dec")
+#add abbreviated month name
+viirs$Month <- mymonths[ as.double(viirs$a_month) ]
+
 
 
 for (i in 1:14) viirs$a_week[i] = 1
@@ -76,10 +90,15 @@ head(viirs)
 We will also add Forest Fire incident reports for 2021 by the Greek Fire Brigade from
 https://www.fireservice.gr/el/synola-dedomenon
 
+https://www.fireservice.gr/documents/20184/412680/Dasikes_Pyrkagies_2021.xls/d9b93e44-60b4-4a32-960b-84bbcdb1efe5
 ```{r}
 #To get coordinates from fire department report log in xls
 suppressWarnings({
-fdreports = read_xls("WildfiresGreece/Dasikes_Pyrkagies_2021.xls", .name_repair = "universal")
+#fdreports = read_xls("WildfiresGreece/Dasikes_Pyrkagies_2021.xls")
+
+#fdreports = read.xlsx("https://www.fireservice.gr/documents/20184/412680/Dasikes_Pyrkagies#_2021.xls/d9b93e44-60b4-4a32-960b-84bbcdb1efe5", sheet = 1)
+
+fdreports = read.xlsx("https://www.fireservice.gr/documents/20184/412680/Dasikes_Pyrkagies_2021.xlsx/0b3e94c3-d850-4604-ba63-21751434a99f", sheet = 1)
 
 #Tidying colnames
 fdreports_df <- as_data_frame(fdreports)
@@ -141,6 +160,21 @@ fdreports_clean <-fdreports_clean |>
          CropsRes = coalesce(as.double(CropsRes), 0),
          Wastelands = coalesce(as.double(Wastelands), 0)
          )
+
+fdreports_clean <-fdreports_clean |>
+  mutate(Woods = Woods*0.1,
+         WoodedArea = WoodedArea*0.1,
+         Parks = Parks*0.1,
+         Grasslands = Grasslands*0.1,
+         Swamps = Swamps*0.1,
+         Crops = Crops*0.1,
+         CropsRes = CropsRes*0.1,
+         Wastelands = Wastelands*0.1
+         )
+
+
+#add abbreviated month name
+fdreports_clean$Month <- mymonths[ as.double(fdreports_clean$a_month) ]
 #points = st_as_sf(fdreports_clean, coords = c("XENGAGE", "YENGAGE"), crs = 4326)
 
 #plot(st_geometry(points), pch=16, col="green")
@@ -158,7 +192,7 @@ fdreports_clean <-fdreports_clean |>
          TotalIncLosses = Woods + WoodedArea + Parks + Grasslands + Swamps + Crops + CropsRes + Wastelands)
 
 head(fdreports_clean |>
-  dplyr::select(1:4, 7:10, 15:16, 32:34, 38:43))
+  dplyr::select(1:4, 7:10, 15:16, 32:34, 38:44))
 
 # icon to blue square
 square_blue <-
@@ -185,21 +219,69 @@ fdreports2021_map <- leaflet(fdreports_clean) |>
 We plot the burned area distribution in the year using the burned area index by the fire service reports. There is burned area by the type of terrain, so we also create a column with the total area lost for each incident. We have tried to bin by week, so there might be multiple incidents stacked per week.  
 ```{r}
 burnedarea <- fdreports_clean |>
-  dplyr::select(7, Woods, TotalIncLosses, a_month, a_week)
+  dplyr::select(3:4, 7, 15:22, TotalIncLosses, a_month, a_week, Month)
 
 #For the plot based only on fd reports
-#suppressWarnings({
-burnedarea |>
+suppressWarnings({
+#pA <- burnedarea |>
+#  ggplot()+
+#  aes(x = a_week, y = as.double(TotalIncLosses), color = a_month)+
+#  geom_col() +
+#  labs(title = "Forest area lost per week of the year 2021 (by fire brigade reports)",
+#       x = NULL,
+#       y = "Area in  Ha",
+#       color = NULL)+
+#  theme(legend.position = "none") +
+  #scale_y_continuous(labels = scales::comma, limits=c(0.1, 60000))
+  #scale_y_continuous(trans = 'log10')
+#  scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
+#              labels = trans_format("log10", math_format(10^.x)))
+
+viirs |>
   ggplot()+
-  aes(x = a_week, y = as.double(TotalIncLosses), color = a_month)+
+  aes(x = a_week, y=pixel_area_ha, fill = a_month)+
   geom_col() +
-  labs(title = "Forest area lost per week of the year 2021 (by fire brigade reports)",
+  labs(title = "Forest area lost per week of the year 2021 (by satellite)",
        x = NULL,
-       y = "Area in 1,000 sq. meters (0.1 Ha)",
+       y = "Area in Ha",
        color = NULL)+
-  theme(legend.position = "none") +
-  scale_y_continuous(labels = scales::comma, limits=c(0.1, 600000))
-#})
+  theme(legend.position = "none")+
+  scale_y_continuous(labels = scales::comma, limits=c(0.1, 80000))
+  #scale_y_continuous(trans = 'log10')
+  #scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
+              #labels = trans_format("log10", math_format(10^.x)))
+
+
+})
+```
+
+
+
+Another interesting idea is to check the type of land destroyed by incident
+```{r}
+burnedareaLong <- pivot_longer(burnedarea, cols = 4:11,
+                              names_to = "LandType",
+                              values_to = "AreaLost")
+
+#Filter for summer
+burnedareaLong <- burnedareaLong |>
+  dplyr::filter(StartDate >= "2021-06-01", StartDate <= "2021-08-31")
+
+burnedareaLong |>
+  ggplot()+
+  aes(x = StartDate, y = as.double(AreaLost), fill = LandType)+
+  geom_col() +
+  labs(title = "Daily area lost for the summer of 2021, by type of land (by fire brigade reports)",
+       x = NULL,
+       y = "Area in Ha",
+       color = NULL)+
+  #theme(legend.position = "plot") +
+  scale_y_continuous(labels = scales::comma, limits=c(0.1, 60000))
+  #scale_y_continuous(trans = 'log10')
+  #scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
+              #labels = trans_format("log10", math_format(10^.x)))
+
+
 ```
 
 
@@ -214,11 +296,12 @@ p1 <-  ggplot(fdreports_clean)+
   geom_point() +
   geom_smooth(method = "loess", span = 5, formula = 'y ~ x') +
   labs(title = NULL,
-       y = "Forest area in 1,000 sq. meters (0.1 Ha)",
+       y = "Forest area in Ha",
        x = "Airframes used (HAF only)",
        color = NULL)+
   theme(legend.position = "none") +
   scale_y_continuous(labels = scales::comma) +
+  #scale_y_continuous(trans = 'log10') +
   xlim(1, 300)
   
 
@@ -227,11 +310,12 @@ p2 <-  ggplot(fdreports_clean)+
   geom_point() +
   geom_smooth(method = "loess", span = 5, formula = 'y ~ x') +
   labs(title = NULL,
-       y = "Forest area in 1,000 sq. meters (0.1 Ha)",
+       y = "Forest area in Ha",
        x = "Airframes used (total)",
        color = NULL)+
   theme(legend.position = "none") +
   scale_y_continuous(labels = scales::comma) +
+  #scale_y_continuous(trans = 'log10') +
   xlim(1, 300)
 
 p3 <-  ggplot(fdreports_clean)+
@@ -239,11 +323,12 @@ p3 <-  ggplot(fdreports_clean)+
   geom_point() +
   geom_smooth(method = "loess", span = 5, formula = 'y ~ x') +
   labs(title = NULL,
-       y = "Total area in 1,000 sq. meters (0.1 Ha)",
+       y = "Total area in Ha",
        x = "Airframes used (total)",
        color = NULL)+
   theme(legend.position = "none") +
   scale_y_continuous(labels = scales::comma) +
+  #scale_y_continuous(trans = 'log10') +
   xlim(1, 300)
 
 p1 | p2 | p3
@@ -258,7 +343,7 @@ Continuing our research on tactics we also check the use of each separate airfra
 ```{r}
 #New table for airframes only
 Airframes_df <- fdreports_clean |>
-  dplyr::select(3:4, 7, 'TotalIncLosses', 32:41)
+  dplyr::select(3:4, 7, 'TotalIncLosses', 32:42)
 
 AirframesLong <- pivot_longer(Airframes_df, cols = 5:11,
                               names_to = "Type",
@@ -271,7 +356,7 @@ AirframesLong <- AirframesLong |>
                                          ifelse(grepl("HiredAir", Type), "LargeAircraft", "Other")))))
 
 HAFonly <- fdreports_clean |>
-  dplyr::select(3:4, 7, 'TotalIncLosses', 32:36, 40:41)
+  dplyr::select(3:4, 7, 'TotalIncLosses', 32:36, 40:42)
 
 HAF_Long <- pivot_longer(Airframes_df, cols = 5:9,
                               names_to = "Type",
@@ -280,7 +365,7 @@ HAF_Long <- pivot_longer(Airframes_df, cols = 5:9,
 HAF_Long <- HAF_Long |>
   mutate(Category = ifelse(grepl("Helicopters", Type), "Helicopter", 
                            ifelse(grepl("CL", Type), "LargeAircraft", 
-                                  ifelse(grepl("PZL", Type), "LightAircraft", "Other"))))
+                                  ifelse(grepl("PZL", Type), "LightAircraft", "Unknown type"))))
 
 
 suppressWarnings({
@@ -290,9 +375,10 @@ ggplot(AirframesLong)+
   geom_point() +
   geom_smooth(method = "loess", span = 5, formula = 'y ~ x') +
   labs(title = NULL,
-       y = "Total area in 1,000 sq. meters (0.1 Ha)",
+       y = "Total area Ha",
        x = "Airframes used (Total)")+
   scale_y_continuous(labels = scales::comma)+
+  #scale_y_continuous(trans = 'log10') +
   facet_wrap(~Category, scales = "free_y", ncol = 1)
 
 })
@@ -301,9 +387,9 @@ ggplot(AirframesLong)+
 
 From the above graphs, there is no clear indication of a unified strategy. What seems to be happening is that whatever system is close-by and available, is sent. While simplistic, it does make sense to simply send 1 or 2 aircraft of any type to start attacking the fire immediately, since you do not know how big it can get or how many others might appear, where more aircraft will be needed.
 
-###Several maps for the summer months
+### Maps for the summer months of 2021
 
-Non-interactive helicopter use map for Summer 2021 (Working)
+To start, we check the helicopter use for the whole country for the week of August.
 ```{r}
 suppressMessages({
 #Attempt to map from shapefile
@@ -337,7 +423,7 @@ AirframesLongH <- AirframesLongH |>
   mutate(HelicopterNumber = Number)
 
 AirframesLongH <- AirframesLongH |>
-  dplyr::filter(StartDate >= "2021-08-01", StartDate <= "2021-08-31")
+  dplyr::filter(a_week >= "31", a_week <= "34")
 
 #Finally, a map of helicopter use density for the entire year
 ggmap(gr_map) +
@@ -350,14 +436,31 @@ ggmap(gr_map) +
     theme(legend.position = "none",
           axis.text.x=element_blank(),
           axis.text.y=element_blank()) +
-    facet_wrap(~a_week, ncol = 3)
+    facet_wrap(~a_week, ncol = 4)
 })
+```
+```{r}
+#Working on shapefile
+gr_shp <- st_read(file.path("C:/Users/manol/Documents/UniLu-MADS/Semester 1/DataVisualization/FinalProject/Solution/DataVisProject_Wildfires/WildfiresGreece/oria_pyrosvestikwn_yphresiwn", "oria_pyrosvestikwn_yphresiwn.shp"))
+
+#Basic plot of this shape file:
+par(mar=c(0,0,0,0))
+plot(st_geometry(gr_shp), col="darkgrey", bg="skyblue", lwd=0.25, border=0 )
+
+gr_shp2 <- sf::st_read("C:/Users/manol/Documents/UniLu-MADS/Semester 1/DataVisualization/FinalProject/Solution/DataVisProject_Wildfires/WildfiresGreece/oria_pyrosvestikwn_yphresiwn/oria_pyrosvestikwn_yphresiwn.shp")
+
+ggplot(gr_shp2) + 
+  geom_sf(aes(fill = Area)) +
+  theme_bw() -> gr_fd_map
+
+
 ```
 
 
-Non-interactive active fire map for mega fire in the island of Euvoia, August 2021
+Then we compare the reported burned areas by the Fire Service investigations to the live active fire spots by VIIRS instruments.
 ```{r}
-suppressMessages({
+suppressWarnings({
+
 #Box for Evoia
 ev_borders = c(bottom  = 37.8, 
                  top     = 39.2,
@@ -369,214 +472,44 @@ pacman::p_load(ggmap, osmdata)
 register_stadiamaps("98c88299-8c42-49e6-924d-98452750666e", write = FALSE)
 ev_map <- get_stadiamap(ev_borders, zoom = 9, maptype = "stamen_terrain")
 
-#Create a helicopter use table
+#Create a burned area table for the 3 summer months
+burnedarea_summer <- burnedarea |>
+  dplyr::filter(StartDate >= "2021-06-01", StartDate <= "2021-08-31")
+
+#Finally, a map of burned area for Euvoia for the summer
+p4 <- ggmap(ev_map) +
+    geom_point(data = burnedarea_summer, mapping = aes(x = XENGAGE, y = YENGAGE, 
+                                        size = TotalIncLosses, color = "red", alpha = 0.5)) +
+    labs(title = "Burned area reports by Fire Service in the island of Euvoia",
+         subtitle = "June-August 2021",
+         x=NULL,
+         y=NULL) +
+    theme(axis.text.x=element_blank(),
+          axis.text.y=element_blank()) +
+    facet_wrap(~Month, ncol = 3)
+
+
+
+#Create an active fire tble for the 3 summer months
 
 activefires <- viirs |>
   dplyr::filter(acq_date >= "2021-06-01", acq_date <= "2021-08-31")
 
-#Finally, a map of helicopter use density for the entire year
-ggmap(ev_map) +
+#Finally, a map of active fires for Euvoia for the summer
+p5 <- ggmap(ev_map) +
     geom_point(data = activefires, mapping = aes(x = longitude, y = latitude, 
                                         col = confidence)) +
     labs(title = "Active fire instances by VIIRS in the island of Euvoia",
-         subtitle = "Summer 2021",
+         subtitle = "June-August 2021",
          x=NULL,
          y=NULL) +
-    theme(legend.position = "none",
-          axis.text.x=element_blank(),
+    theme(axis.text.x=element_blank(),
           axis.text.y=element_blank()) +
-    facet_wrap(~a_month, ncol = 3) +
+    facet_wrap(~Month, ncol = 3) +
     scale_color_brewer(palette = "YlOrRd")
+
+p4/p5
 })
 ```
 
-Mapping out different airframe use for the 3 summer months (Shiny App)
-
-First, for helicopters
-```{r}
-#We will check July for starters
-#AirframesLongJuly <- AirframesLong |>
-#  dplyr::filter(a_month == "07")
-
-#We will only check helicopters for simplicity
-AirframesLongH <- AirframesLong |>
-  dplyr::filter(Category == "Helicopter")
-
-AirframesLongH <- AirframesLongH |>
-  dplyr::filter(Number != 0)
-
-#Icon for helicopters
-helicopter_icon <-
-  makeIcon(iconUrl = "https://www.freeiconspng.com/uploads/helicopter-icon-17.png",
-           iconWidth = 18,
-           iconHeight = 18)
-
-#Map of uses of the specific airframe in July
-
-helicopter_July_map <- leaflet(width = "100%") %>%
-  setView(lng = 24.16, lat = 38.51, zoom = 6) %>%
-  addProviderTiles("Esri.WorldStreetMap")
-
-# specify shiny user interface and time slider
-
-
-#https://blogs.unimelb.edu.au/researcher-library/2020/06/19/making-a-covid-19-map-in-r-usin#g-shiny-and-leaflet/
-
-#BETTER
-#https://stackoverflow.com/questions/69276453/how-do-i-create-a-shiny-slider-app-to-view-my-data-over-time-on-the-map-that-i-h
-ui <- shinyUI(pageWithSidebar(
-  headerPanel("Map of Helicopter use for Summer 2021"),
-  sidebarPanel(
-    dateRangeInput(
-      "range",
-      "Date range",
-      start  = "2021-06-01",
-      end    = "2021-08-31"
-    )),
-  mainPanel(
-    leafletOutput("map")
-  )
-))
-
-# shiny server input/output
-server <- shinyServer(function(input, output) {
-  filtered_data_H <- reactive({
-    AirframesLongH |> filter(AirframesLongH$StartDate >= input$range[1] & AirframesLongH$StartDate <= input$range[2])
-  })
-
-  output$map <- renderLeaflet({
-    helicopter_July_map |>
-      addMarkers(
-        data = filtered_data_H(),
-        lng = ~XENGAGE,
-        lat = ~YENGAGE,
-        icon = ~helicopter_icon
-      ) 
-      
-  })
-})
-
-shinyApp(ui, server)
-
-```
-
-
-
-Then, for heavy aircraft:
-```{r}
-  #We will only check heavy aircraft for simplicity
-AirframesLongAXL <- AirframesLong |>
-  dplyr::filter(Category == "LargeAircraft")
-
-AirframesLongAXL <- AirframesLongAXL |>
-  dplyr::filter(Number != 0)
-
-#Icon for helicopters
-AXL_icon <-
-  makeIcon(iconUrl = "https://www.freeiconspng.com/uploads/plane-icon--iconshow-14.png",
-           iconWidth = 18,
-           iconHeight = 18)
-
-#Map of uses of the specific airframe in July
-
-HeavyAircraft_July_map <- leaflet(width = "100%") %>%
-  setView(lng = 24.16, lat = 38.51, zoom = 6) %>%
-  addProviderTiles("Esri.WorldStreetMap")
-
-# specify shiny user interface and time slider
-
-
-#https://blogs.unimelb.edu.au/researcher-library/2020/06/19/making-a-covid-19-map-in-r-usin#g-shiny-and-leaflet/
-
-#BETTER
-#https://stackoverflow.com/questions/69276453/how-do-i-create-a-shiny-slider-app-to-view-my-data-over-time-on-the-map-that-i-h
-ui2 <- shinyUI(pageWithSidebar(
-  headerPanel("Map of Large Aircraft use for Summer 2021"),
-  sidebarPanel(
-    dateRangeInput(
-      "range",
-      "Date range",
-      start  = "2021-06-01",
-      end    = "2021-08-31"
-    )),
-  mainPanel(
-    leafletOutput("map")
-  )
-))
-
-# shiny server input/output
-server2 <- shinyServer(function(input, output) {
-  filtered_data_AXL <- reactive({
-    AirframesLongAXL |> filter(AirframesLongAXL$StartDate >= input$range[1] & AirframesLongAXL$StartDate <= input$range[2])
-  })
-
-  output$map <- renderLeaflet({
-    HeavyAircraft_July_map |>
-      addMarkers(
-        data = filtered_data_AXL(),
-        lng = ~XENGAGE,
-        lat = ~YENGAGE,
-        icon = ~AXL_icon
-      ) 
-      
-  })
-})
-
-shinyApp(ui2, server2)
-
-```
-
-
-
-For active fires by VIIRS satelite data
-```{r}
-#We only choose high confidence squares
-activefires <- viirs |>
-  dplyr::filter(confidence == "h")
-
-
-square_red <-
-  makeIcon(iconUrl = "https://www.freeiconspng.com/uploads/red-square-png-14.png",
-           iconWidth = 18,
-           iconHeight = 18)
-
-livefires_map <- leaflet(width = "100%") %>%
-  setView(lng = 24.16, lat = 38.51, zoom = 6) %>%
-  addProviderTiles("Esri.WorldStreetMap")
-
-# specify shiny user interface and time slider
-ui3 <- shinyUI(pageWithSidebar(
-  headerPanel("Map of Active fires by VIIRS sensors for Summer 2021"),
-  sidebarPanel(
-    dateRangeInput(
-      "range",
-      "Date range",
-      start  = "2021-06-01",
-      end    = "2021-08-31"
-    )),
-  mainPanel(
-    leafletOutput("map")
-  )
-))
-
-# shiny server input/output
-server3 <- shinyServer(function(input, output) {
-  filtered_data_active <- reactive({
-    activefires |> filter(activefires$acq_date >= input$range[1] & activefires$acq_date <= input$range[2])
-  })
-
-  output$map <- renderLeaflet({
-    livefires_map |>
-      addMarkers(
-        data = filtered_data_active(),
-        lng = ~longitude,
-        lat = ~latitude,
-        icon = ~square_red
-      ) 
-      
-  })
-})
-
-shinyApp(ui3, server3)
-```
 
