@@ -65,8 +65,10 @@ viirs <- viirs |>
 #For the fire service data (import and clean/edit)
 suppressWarnings({
 
-fdreports = read_xls("WildfiresGreece/Dasikes_Pyrkagies_2021.xls")
-#fdreports = read.xlsx("https://www.fireservice.gr/documents/20184/412680/Dasikes_Pyrkagies_2021.xlsx/0b3e94c3-d850-4604-ba63-21751434a99f", sheet = 1)
+#As of 19/01/2024, the fire service website was down. If that is still the case on the day of the presentaion, 
+#I will have to use the locally downloaded file on my computer, or upload it on GitHub
+#fdreports = read_xls("WildfiresGreece/Dasikes_Pyrkagies_2021.xls")
+fdreports = read.xlsx("https://www.fireservice.gr/documents/20184/412680/Dasikes_Pyrkagies_2021.xlsx/0b3e94c3-d850-4604-ba63-21751434a99f", sheet = 1)
 
 #Tidying colnames (many where in Greek)
 fdreports_df <- as_data_frame(fdreports)
