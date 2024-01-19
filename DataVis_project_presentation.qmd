@@ -1,0 +1,341 @@
+---
+title: "Study of forest fires in Greece and the human factor"
+subtitle: "Data Visualization project"
+author: "Papadimitriou E. F."
+format: revealjs
+editor: visual
+---
+
+```{r, include=FALSE}
+suppressWarnings({
+library(dplyr)
+library(readxl)
+library(openxlsx)
+library(janitor)
+library(lubridate)
+library(ggplot2)
+library(scales)
+library(ggmap)
+library(maps)
+library(patchwork)
+library(tidyverse)
+library(terra)
+library(geodata)
+library(maptiles)
+library(raster)
+library(sp)
+library(sf)
+library(leaflet)
+library(leaflet.extras2)
+library(shiny)
+library(devtools)
+library(osmdata)
+library(RColorBrewer)
+library(knitr)
+library(png)
+})
+
+#For the satellite data (import and clean/edit)
+suppressWarnings({
+viirs = read.csv("https://firms.modaps.eosdis.nasa.gov/data/country/viirs-snpp/2021/viirs-snpp_2021_Greece.csv", as.is=T)
+
+})
+#Need to add month and week for each incident for later analysis. Also, the area of each pixel is around 375m*375m so we add an "area in ha" row for space analysis.
+viirs <- viirs |>
+    mutate(a_month = format(as.Date(acq_date), "%m"),
+         a_week = isoweek(as.Date(acq_date)),
+         pixel_area_ha = 375*375/10000)
+
+#Due to unusual month format, we are creating a seperate matrix to match insidents to months.
+mymonths <- c("1.Jan","2.Feb","3.Mar",
+              "4.Apr","5.May","6.Jun",
+              "7.Jul","8.Aug","9.Sep",
+              "10.Oct","11.Nov","12.Dec")
+#add abbreviated month name
+viirs$Month <- mymonths[ as.double(viirs$a_month) ]
+
+#For a number of cells, we see that they are on week 53 (wrong), so we manually correct it to week 1
+for (i in 1:14) viirs$a_week[i] = 1
+
+#We also create a new numeric confidense level column, for safer use in analysis
+viirs <- viirs |>
+  mutate(conf = ifelse(grepl("h", confidence), "3", 
+                           ifelse(grepl("n", confidence), "2","1")))
+
+#For the fire service data (import and clean/edit)
+suppressWarnings({
+
+fdreports = read_xls("WildfiresGreece/Dasikes_Pyrkagies_2021.xls")
+#fdreports = read.xlsx("https://www.fireservice.gr/documents/20184/412680/Dasikes_Pyrkagies_2021.xlsx/0b3e94c3-d850-4604-ba63-21751434a99f", sheet = 1)
+
+#Tidying colnames (many where in Greek)
+fdreports_df <- as_data_frame(fdreports)
+colnames(fdreports_df) <- fdreports_df[1,]
+fdreports_df <- fdreports_df[-1,]
+colnames(fdreports_df)[3] = "XENGAGE"
+colnames(fdreports_df)[4] = "YENGAGE"
+colnames(fdreports_df)[7] = "StartDate"
+colnames(fdreports_df)[15] = "Woods"
+colnames(fdreports_df)[16] = "WoodedArea"
+colnames(fdreports_df)[17] = "Parks"
+colnames(fdreports_df)[18] = "Grasslands"
+colnames(fdreports_df)[19] = "Swamps"
+colnames(fdreports_df)[20] = "Crops"
+colnames(fdreports_df)[21] = "CropsRes"
+colnames(fdreports_df)[22] = "Wastelands"
+colnames(fdreports_df)[32] = "Helicopters"
+colnames(fdreports_df)[33] = "CL415"
+colnames(fdreports_df)[34] = "CL215"
+colnames(fdreports_df)[35] = "PZL"
+colnames(fdreports_df)[36] = "GRU."
+colnames(fdreports_df)[37] = "HiredHeli"
+colnames(fdreports_df)[38] = "HiredAircraft"
+
+#Remove points outside Greece (after manual check of data there is a number of points in the middle of the Atlantic)
+fdreports_df <- filter(fdreports_df, XENGAGE > 18, YENGAGE > 34 )
+
+#Tidying the excel dates
+fdreports_df$StartDate <- as.numeric(as.character(fdreports_df$StartDate))
+fdreports_df$StartDate <- as.Date(fdreports_df$StartDate, origin = "1899-12-30")
+fdreports_df$'Ημερ/νία Κατασβεσης' <- as.numeric(as.character(fdreports_df$'Ημερ/νία Κατασβεσης'))
+fdreports_df$'Ημερ/νία Κατασβεσης' <- as.Date(fdreports_df$'Ημερ/νία Κατασβεσης', origin = "1899-12-30")
+
+#Clean lines with no coordinates for map creation (don't want NA values)
+fdreports_clean <- fdreports_df |>
+  drop_na("XENGAGE", "YENGAGE")
+})
+
+fdreports_clean$XENGAGE <- as.numeric(fdreports_clean$XENGAGE)
+fdreports_clean$YENGAGE <- as.numeric(fdreports_clean$YENGAGE)
+
+#Clean up of all numerical type columns, since there where a lot of errors in later operations otherwise.
+fdreports_clean <-fdreports_clean |>
+  mutate(a_month = format(fdreports_clean$StartDate, "%m"),
+         a_week = isoweek(as.Date(StartDate)),
+         HiredHeli = coalesce(as.double(HiredHeli), 0),
+         HiredAircraft = coalesce(as.double(HiredAircraft), 0),
+         Helicopters = coalesce(as.double(Helicopters), 0),
+         CL415 = coalesce(as.double(CL415), 0),
+         CL215 = coalesce(as.double(CL215), 0),
+         PZL = coalesce(as.double(PZL), 0),
+         GRU. = coalesce(as.double(GRU.), 0),
+         Woods = coalesce(as.double(Woods), 0),
+         WoodedArea = coalesce(as.double(WoodedArea), 0),
+         Parks = coalesce(as.double(Parks), 0),
+         Grasslands = coalesce(as.double(Grasslands), 0),
+         Swamps = coalesce(as.double(Swamps), 0),
+         Crops = coalesce(as.double(Crops), 0),
+         CropsRes = coalesce(as.double(CropsRes), 0),
+         Wastelands = coalesce(as.double(Wastelands), 0)
+         )
+
+#Make all area values in Ha instead of Stremata (Greek unit of surface area)
+fdreports_clean <-fdreports_clean |>
+  mutate(Woods = Woods*0.1,
+         WoodedArea = WoodedArea*0.1,
+         Parks = Parks*0.1,
+         Grasslands = Grasslands*0.1,
+         Swamps = Swamps*0.1,
+         Crops = Crops*0.1,
+         CropsRes = CropsRes*0.1,
+         Wastelands = Wastelands*0.1
+         )
+
+
+#Add abbreviated month name (same matrix as the one for the VIIRS data)
+fdreports_clean$Month <- mymonths[ as.double(fdreports_clean$a_month) ]
+
+#Specific values where visualy inspected to be out of range (the number of available aircraft for 2021 is publicly available, as such we have replaced with the largest value possible fo each incident)
+fdreports_clean$CL415[6506] = 6
+fdreports_clean$CL215[6506] = 9
+fdreports_clean$HiredHeli[7147] = 28
+fdreports_clean$HiredAircraft[7147] = 9
+
+#Extra columns with total number of aircrafts for the AF and in general, as well as sum of area of different terrains that was lost in each incident.
+fdreports_clean <-fdreports_clean |>
+  mutate(AFairframes = Helicopters + CL415 + CL215 + PZL + GRU.,
+         TotalAirframes = Helicopters + CL415 + CL215 + PZL + GRU. + HiredHeli + HiredAircraft,
+         TotalIncLosses = Woods + WoodedArea + Parks + Grasslands + Swamps + Crops + CropsRes + Wastelands)
+
+```
+
+## Distribution of burned area in 2021
+
+```{r}
+#For the plot based only on satellite data
+suppressWarnings({
+
+count(viirs, a_week) |>
+  mutate(col=ifelse(n<50000000/(375*375), "yellow",
+                           ifelse(n<300000000/(375*375), "orange", "red"))) |>
+  ggplot()+
+  aes(x = a_week, y = n*375*375/10000, fill = as.factor(col))+
+  geom_col() +
+  labs(title = "Forest area lost per week of the year 2021 (by satellite)",
+       x = NULL,
+       y = "Area in Ha",
+       color = NULL)+
+  theme(legend.position = "none")+
+  #scale_y_continuous(labels = scales::comma, limits=c(0.1, 80000))+
+  scale_fill_identity() +
+  theme_minimal()
+
+})
+```
+
+## Category of airframes used compared to the size of the fire
+
+```{r}
+#New table for airframes only
+Airframes_df <- fdreports_clean |>
+  dplyr::select(3:4, 7, 'TotalIncLosses', 32:42)
+
+#We then pivot for aicraft types for the rest of this analysis
+AirframesLong <- pivot_longer(Airframes_df, cols = 5:11,
+                              names_to = "Type",
+                              values_to = "Number")
+
+#We also add a Hired status column (hired or Air Force) and a category column (all types belong to one category)
+AirframesLong <- AirframesLong |>
+  mutate(Hired = ifelse(grepl("Hired", Type), "Hired", "HAF"),
+         Category = ifelse(grepl("Heli", Type), "Helicopter", 
+                           ifelse(grepl("CL", Type), "LargeAircraft", 
+                                  ifelse(grepl("PZL", Type), "LightAircraft", 
+                                         ifelse(grepl("HiredAir", Type), "LargeAircraft", "Unknown type")))))
+
+
+suppressWarnings({
+
+air_map <- ggplot(AirframesLong)+
+  aes(y = TotalIncLosses, x = Number, color = Category, shape = Hired)+
+  geom_point() +
+  geom_smooth(method = "loess", span = 5, formula = 'y ~ x') +
+  labs(title = NULL,
+       y = "Total area Ha",
+       x = "Number of airframes used")+
+  scale_y_continuous(labels = scales::comma)+
+  scale_x_discrete(limits=c(0,5,10,15,20,25,29)) +
+  theme(legend.position = "bottom")+
+  scale_color_discrete(name = "Owner of equipment")+
+  facet_wrap(~Category, scales = "free_y", ncol = 1)+
+  theme_minimal()
+
+air_map +
+  guides(color = 'none')
+})
+```
+
+## Mega fire on Evia Island (August 2021)
+
+#### On-site investigations VS satellite data
+
+```{r}
+suppressWarnings({
+
+#Box for Evoia
+ev_borders = c(bottom  = 37.8, 
+                 top     = 39.2,
+                 left    = 23,
+                 right   = 25)
+
+#Create a stadia terrain (osm) map
+pacman::p_load(ggmap, osmdata)
+register_stadiamaps("98c88299-8c42-49e6-924d-98452750666e", write = FALSE)
+ev_map <- get_stadiamap(ev_borders, zoom = 9, maptype = "stamen_terrain")
+
+#Create a burned area table for the 3 summer months
+burnedarea <- fdreports_clean |>
+  dplyr::select(3:4, 7, 15:22, TotalIncLosses, a_month, a_week, Month)
+
+burnedarea_summer <- burnedarea |>
+  dplyr::filter(StartDate >= "2021-08-01", StartDate <= "2021-08-31")
+
+#Finally, a map of burned area for Euvoia for the summer
+p4 <- ggmap(ev_map) +
+    geom_point(data = burnedarea_summer, mapping = aes(x = XENGAGE, y = YENGAGE, 
+                                        size = TotalIncLosses, colour = "red")) +
+    labs(title = "Burned area reports by Fire Service",
+         subtitle = "Area lost represented as area of circle",
+         x=NULL,
+         y=NULL) +
+    theme(legend.position = "none",
+          axis.text.x=element_blank(),
+          axis.text.y=element_blank()) +
+    facet_wrap(~Month, ncol = 3)
+
+#Create an active fire table for the 3 summer months
+activefires <- viirs |>
+  dplyr::filter(acq_date >= "2021-08-01", acq_date <= "2021-08-31")
+
+#Finally, a map of active fires for Euvoia for the summer
+p5 <- ggmap(ev_map) +
+    geom_point(data = activefires, mapping = aes(x = longitude, y = latitude, 
+                                        color = conf)) +
+    labs(title = "Active fire instances by VIIRS",
+         subtitle = "With coresponding confidence level",
+         x=NULL,
+         y=NULL) +
+    theme(legend.position = "bottom",
+          axis.text.x=element_blank(),
+          axis.text.y=element_blank()) +
+    facet_wrap(~Month, ncol = 3) +
+    scale_color_brewer(name = "Confidence level", labels = c("low", "nominal", "high"), palette = "YlOrRd")
+
+p4|p5
+})
+```
+
+## Use of helicopters for firefighting
+
+```{r}
+suppressMessages({
+#Box for Greece
+gr_borders = c(bottom  = 34.06779648445501, 
+                 top     = 41.91452561696354,
+                 left    = 18.573755594482613,
+                 right   = 28.350020019193696)
+
+#Create a stadia terrain (osm) map
+pacman::p_load(ggmap, osmdata)
+register_stadiamaps("98c88299-8c42-49e6-924d-98452750666e", write = FALSE)
+gr_map <- get_stadiamap(gr_borders, zoom = 7, maptype = "stamen_terrain")
+
+#Create a helicopter use table
+AirframesLongH <- AirframesLong |>
+  dplyr::filter(Category == "Helicopter")
+
+AirframesLongH <- AirframesLongH |>
+  dplyr::filter(Number != 0)
+
+AirframesLongH <- AirframesLongH |>
+  mutate(HelicopterNumber = Number)
+
+AirframesLongH <- AirframesLongH |>
+  dplyr::filter(a_week >= "31", a_week <= "34")
+
+#Finally, a map of helicopter use density for the entire year
+heli_map <- ggmap(gr_map) +
+    geom_point(data = AirframesLongH, mapping = aes(x = XENGAGE, y = YENGAGE, 
+                                        size = HelicopterNumber, color = Hired, alpha = 0.5)) +
+    labs(title = "Weeks of August 2021",
+         subtitle = NULL,
+         x=NULL,
+         y=NULL) +
+    scale_color_discrete(name = "Owner of equipment")+
+    scale_size_continuous(name = "Number of helicopters used")+
+    theme(legend.position = "bottom",
+          axis.text.x=element_blank(),
+          axis.text.y=element_blank()) +
+    facet_wrap(~a_week, ncol = 4)
+
+heli_map +
+  guides(alpha = 'none')
+})
+```
+
+## Not just hired equipment...
+
+```{r, out.width = "50%", out.height="25%",fig.show='hold',fig.align='center'}
+knitr::include_graphics(c("https://eretikos.gr/wp-content/uploads/2021/08/pyrisvestes-polonia.jpg", "https://www.olympia.gr/wp-content/uploads/2023/07/IMG_7344-696x392.jpeg"))
+
+```
