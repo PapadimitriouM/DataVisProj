@@ -217,8 +217,7 @@ air_map <- ggplot(AirframesLong)+
        x = "Number of airframes used")+
   scale_y_continuous(labels = scales::comma)+
   scale_x_discrete(limits=c(0,5,10,15,20,25,29)) +
-  theme(legend.position = "bottom")+
-  scale_color_discrete(name = "Owner of equipment")+
+  scale_shape_discrete(name = "Owner of equipment")+
   facet_wrap(~Category, scales = "free_y", ncol = 1)+
   theme_minimal()
 
