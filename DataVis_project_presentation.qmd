@@ -204,10 +204,11 @@ AirframesLong <- AirframesLong |>
                                   ifelse(grepl("PZL", Type), "LightAircraft", 
                                          ifelse(grepl("HiredAir", Type), "LargeAircraft", "Unknown type")))))
 
+AirframesKnown <- filter(AirframesLong, Category != "Unknown type")
 
 suppressWarnings({
 
-air_map <- ggplot(AirframesLong)+
+air_map <- ggplot(AirframesKnown)+
   aes(y = TotalIncLosses, x = Number, color = Category, shape = Hired)+
   geom_point() +
   geom_smooth(method = "loess", span = 5, formula = 'y ~ x') +
